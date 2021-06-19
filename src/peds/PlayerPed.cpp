@@ -509,6 +509,25 @@ CPlayerPed::DoWeaponSmoothSpray(void)
 	return false;
 }
 
+float
+CPlayerPed::GetWeaponSmoothSprayRate()
+{
+	if(m_nPedState == PED_ATTACK && !m_pPointGunAt) {
+		CWeaponInfo *weaponInfo = CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType);
+		switch(GetWeapon()->m_eWeaponType) {
+		case WEAPONTYPE_SHOTGUN:
+		case WEAPONTYPE_AK47:
+		case WEAPONTYPE_M16: return PI / 180.f;
+		case WEAPONTYPE_FLAMETHROWER: return PI / 80.f;
+		case WEAPONTYPE_BASEBALLBAT:
+		case WEAPONTYPE_HELICANNON: return PI / 176.f;
+		default: return -1.0f;
+		}
+	}
+	if(bIsDucking) return PI / 112.f;
+	return -1.0f;
+}
+
 void
 CPlayerPed::DoStuffToGoOnFire(void)
 {
@@ -1168,29 +1187,30 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
 void
 CPlayerPed::PlayerControlZelda(CPad *padUsed)
 {
-	bool doSmoothSpray = DoWeaponSmoothSpray();
+	float smoothSprayRate = GetWeaponSmoothSprayRate();
 	float camOrientation = TheCamera.Orientation;
 	float leftRight = padUsed->GetPedWalkLeftRight();
 	float upDown = padUsed->GetPedWalkUpDown();
 	float padMoveInGameUnit;
 	bool smoothSprayWithoutMove = false;
 
-	if (doSmoothSpray && upDown > 0.0f) {
+	if(m_pPointGunAt && !CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType)->IsFlagSet(WEAPONFLAG_CANAIM_WITHARM)) {
+		upDown = 0.0f;
+		leftRight = 0.0f;
+	}
+
+	if(smoothSprayRate > 0.0f && upDown > 0.0f) {
 		padMoveInGameUnit = 0.0f;
 		smoothSprayWithoutMove = true;
 	} else {
 		padMoveInGameUnit = CVector2D(leftRight, upDown).Magnitude() / PAD_MOVE_TO_GAME_WORLD_MOVE;
 	}
 
-	if (padMoveInGameUnit > 0.0f || smoothSprayWithoutMove) {
+	if(padMoveInGameUnit > 0.0f || smoothSprayWithoutMove) {
 		float padHeading = CGeneral::GetRadianAngleBetweenPoints(0.0f, 0.0f, -leftRight, upDown);
 		float neededTurn = CGeneral::LimitRadianAngle(padHeading - camOrientation);
-		if (doSmoothSpray) {
-			if (GetWeapon()->m_eWeaponType == WEAPONTYPE_FLAMETHROWER || GetWeapon()->m_eWeaponType == WEAPONTYPE_COLT45
-				|| GetWeapon()->m_eWeaponType == WEAPONTYPE_UZI)
-				m_fRotationDest = m_fRotationCur - leftRight / 128.0f * (PI / 80.0f) * CTimer::GetTimeStep();
-			else
-				m_fRotationDest = m_fRotationCur - leftRight / 128.0f * (PI / 128.0f) * CTimer::GetTimeStep();
+		if(smoothSprayRate > 0.0f) {
+			m_fRotationDest = m_fRotationCur - leftRight / 128.0f * smoothSprayRate * CTimer::GetTimeStep();
 		} else {
 			m_fRotationDest = neededTurn;
 		}
@@ -1202,32 +1222,32 @@ CPlayerPed::PlayerControlZelda(CPad *padUsed)
 		m_fMoveSpeed = 0.0f;
 	}
 
-	if (m_nPedState == PED_JUMP) {
-		if (bIsInTheAir) {
-			if (bUsesCollision && !bHitSteepSlope && (!bHitSomethingLastFrame || m_vecDamageNormal.z > 0.6f)
-				&& m_fDistanceTravelled < CTimer::GetTimeStep() * 0.02 && m_vecMoveSpeed.MagnitudeSqr() < 0.01f) {
+	if(m_nPedState == PED_JUMP) {
+		if(bIsInTheAir) {
+			if(bUsesCollision && !bHitSteepSlope && (!bHitSomethingLastFrame || m_vecDamageNormal.z > 0.6f) &&
+			   m_fDistanceTravelled < CTimer::GetTimeStep() * 0.02 && m_vecMoveSpeed.MagnitudeSqr() < 0.01f) {
 
 				float angleSin = Sin(m_fRotationCur); // originally sin(DEGTORAD(RADTODEG(m_fRotationCur))) o_O
 				float angleCos = Cos(m_fRotationCur);
 				ApplyMoveForce(-angleSin * 3.0f, 3.0f * angleCos, 0.05f);
 			}
-		} else if (bIsLanding) {
+		} else if(bIsLanding) {
 			m_fMoveSpeed = 0.0f;
 		}
 	}
 
-	if (!CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType)->IsFlagSet(WEAPONFLAG_HEAVY) && padUsed->GetSprint()) {
-		m_nMoveState = PEDMOVE_SPRINT;
+	if(!CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType)->IsFlagSet(WEAPONFLAG_HEAVY) && padUsed->GetSprint()) {
+		if(!m_pCurrentPhysSurface || (!m_pCurrentPhysSurface->bInfiniteMass)) m_nMoveState = PEDMOVE_SPRINT;
 	}
-	if (m_nPedState != PED_FIGHT)
-		SetRealMoveAnim();
 
-	if (!bIsInTheAir && !(CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType)->IsFlagSet(WEAPONFLAG_HEAVY))
-		&& padUsed->JumpJustDown() && m_nPedState != PED_JUMP) {
+	if(m_nPedState != PED_FIGHT) SetRealMoveAnim();
+
+	if(!bIsInTheAir && !CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType)->IsFlagSet(WEAPONFLAG_HEAVY) && padUsed->JumpJustDown() &&
+	   m_nPedState != PED_JUMP) {
 		ClearAttack();
 		ClearWeaponTarget();
-		if (m_nEvadeAmount != 0 && m_pEvadingFrom) {
-			SetEvasiveDive((CPhysical*)m_pEvadingFrom, 1);
+		if(m_nEvadeAmount != 0 && m_pEvadingFrom) {
+			SetEvasiveDive((CPhysical *)m_pEvadingFrom, 1);
 			m_nEvadeAmount = 0;
 			m_pEvadingFrom = nil;
 		} else {
